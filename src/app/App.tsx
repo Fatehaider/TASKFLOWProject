@@ -877,7 +877,7 @@ function TaskModal({ onClose, onSave, editTask }: {
               )}>
               <Upload size={20} className="text-muted-foreground mx-auto mb-2" />
               <p className="text-sm text-muted-foreground">Drop files here or <span className="text-primary font-medium">browse</span></p>
-              <p className="text-xs text-muted-foreground mt-1">PDF, PNG, Figma, ZIP up to 50MB</p>
+              <p className="text-xs text-muted-foreground mt-1">PDF, PNG, ZIP up to 50MB</p>
             </div>
             {files.length > 0 && (
               <div className="flex flex-col gap-1 mt-1">
