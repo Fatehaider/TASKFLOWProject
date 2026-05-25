@@ -1,7 +1,7 @@
 ﻿import 'dotenv/config';
 import express from 'express';
 import cors from 'cors';
-import { randomUUID } from 'crypto';
+import { randomUUID, randomBytes, scryptSync, timingSafeEqual } from 'crypto';
 import { MongoClient } from 'mongodb';
 
 const app = express();
@@ -30,6 +30,10 @@ const colorByAssignee = {
 const client = new MongoClient(MONGO_URI);
 let tasksCollection;
 let notificationsCollection;
+let usersCollection;
+
+const PASSWORD_SALT_BYTES = 16;
+const PASSWORD_KEY_LENGTH = 64;
 
 function isValidStatus(status) {
   return ['todo', 'in-progress', 'review', 'done'].includes(status);
@@ -115,14 +119,79 @@ function validateTaskInput(body) {
   return null;
 }
 
+function hashPassword(password) {
+  const salt = randomBytes(PASSWORD_SALT_BYTES).toString('hex');
+  const derived = scryptSync(password, salt, PASSWORD_KEY_LENGTH).toString('hex');
+  return `${salt}:${derived}`;
+}
+
+function verifyPassword(password, storedHash) {
+  if (typeof storedHash !== 'string') {
+    return false;
+  }
+
+  const [salt, expectedHash] = storedHash.split(':');
+  if (!salt || !expectedHash) {
+    return false;
+  }
+
+  const derived = scryptSync(password, salt, PASSWORD_KEY_LENGTH).toString('hex');
+  return timingSafeEqual(Buffer.from(expectedHash, 'hex'), Buffer.from(derived, 'hex'));
+}
+
+function buildUserColor(name) {
+  let hash = 0;
+  const source = String(name || 'TaskFlow');
+
+  for (let index = 0; index < source.length; index += 1) {
+    hash = source.charCodeAt(index) + ((hash << 5) - hash);
+  }
+
+  const palette = ['#4F46E5', '#22C55E', '#F59E0B', '#EF4444', '#0F172A', '#8B5CF6'];
+  return palette[Math.abs(hash) % palette.length];
+}
+
+function sanitizeUser(user) {
+  if (!user) {
+    return user;
+  }
+
+  const { _id, passwordHash, ...rest } = user;
+  return rest;
+}
+
+function validateAuthInput(body, isRegistration) {
+  if (!body || typeof body !== 'object') {
+    return 'Request body is required.';
+  }
+
+  if (typeof body.email !== 'string' || !body.email.trim() || !body.email.includes('@')) {
+    return 'A valid email is required.';
+  }
+
+  if (typeof body.password !== 'string' || body.password.length < 8) {
+    return 'Password must be at least 8 characters.';
+  }
+
+  if (isRegistration) {
+    if (typeof body.name !== 'string' || !body.name.trim()) {
+      return 'Name is required.';
+    }
+  }
+
+  return null;
+}
+
 async function connectDatabase() {
   await client.connect();
   const db = client.db(DATABASE_NAME);
   tasksCollection = db.collection('taskflow_tasks');
   notificationsCollection = db.collection('taskflow_notifications');
+  usersCollection = db.collection('taskflow_users');
 
   await tasksCollection.createIndex({ id: 1 }, { unique: true });
   await notificationsCollection.createIndex({ id: 1 }, { unique: true });
+  await usersCollection.createIndex({ email: 1 }, { unique: true });
   await tasksCollection.createIndex({ createdAt: -1 });
   await notificationsCollection.createIndex({ createdAt: -1 });
 }
@@ -297,6 +366,58 @@ app.get('/api/notifications', async (_req, res) => {
   } catch (error) {
     console.error(error);
     res.status(500).json({ error: 'Unable to load notifications.' });
+  }
+});
+
+app.post('/api/auth/register', async (req, res) => {
+  try {
+    const validationError = validateAuthInput(req.body, true);
+    if (validationError) {
+      return res.status(400).json({ error: validationError });
+    }
+
+    const email = req.body.email.trim().toLowerCase();
+    const existingUser = await usersCollection.findOne({ email });
+
+    if (existingUser) {
+      return res.status(409).json({ error: 'An account with this email already exists.' });
+    }
+
+    const user = {
+      id: `U-${randomUUID().slice(0, 8)}`,
+      name: req.body.name.trim(),
+      email,
+      color: buildUserColor(req.body.name.trim()),
+      passwordHash: hashPassword(req.body.password),
+      createdAt: new Date().toISOString(),
+    };
+
+    await usersCollection.insertOne(user);
+    res.status(201).json({ user: sanitizeUser(user) });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: 'Unable to register user.' });
+  }
+});
+
+app.post('/api/auth/login', async (req, res) => {
+  try {
+    const validationError = validateAuthInput(req.body, false);
+    if (validationError) {
+      return res.status(400).json({ error: validationError });
+    }
+
+    const email = req.body.email.trim().toLowerCase();
+    const user = await usersCollection.findOne({ email });
+
+    if (!user || !verifyPassword(req.body.password, user.passwordHash)) {
+      return res.status(401).json({ error: 'Invalid email or password.' });
+    }
+
+    res.json({ user: sanitizeUser(user) });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: 'Unable to log in.' });
   }
 });
 

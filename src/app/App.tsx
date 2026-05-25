@@ -12,7 +12,7 @@ import {
   BarChart, Bar, LineChart, Line, PieChart, Pie, Cell,
   XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, Area, AreaChart
 } from "recharts";
-import { createTask, deleteTask, listNotifications, listTasks, shareTask, updateTask } from "../lib/taskApi";
+import { createTask, deleteTask, listNotifications, listTasks, loginUser, registerUser, shareTask, updateTask } from "../lib/taskApi";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -57,13 +57,12 @@ interface ActivityItem {
 }
 
 interface UserAccount {
+  id?: string;
   name: string;
   email: string;
-  password: string;
   color: string;
 }
 
-const AUTH_USERS_KEY = "taskflow-users";
 const AUTH_CURRENT_USER_KEY = "taskflow-current-user";
 
 function hashColor(value: string) {
@@ -78,24 +77,6 @@ function hashColor(value: string) {
   return palette[safeIndex];
 }
 
-function loadStoredUsers(): UserAccount[] {
-  if (typeof window === "undefined") {
-    return [];
-  }
-
-  try {
-    const raw = window.localStorage.getItem(AUTH_USERS_KEY);
-    if (!raw) {
-      return [];
-    }
-
-    const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) ? parsed : [];
-  } catch {
-    return [];
-  }
-}
-
 function loadCurrentUser(): UserAccount | null {
   if (typeof window === "undefined") {
     return null;
@@ -108,7 +89,16 @@ function loadCurrentUser(): UserAccount | null {
     }
 
     const parsed = JSON.parse(raw);
-    return typeof parsed?.email === "string" && typeof parsed?.name === "string" ? parsed : null;
+    if (typeof parsed?.email !== "string" || typeof parsed?.name !== "string") {
+      return null;
+    }
+
+    return {
+      id: typeof parsed.id === "string" ? parsed.id : undefined,
+      name: parsed.name,
+      email: parsed.email,
+      color: typeof parsed.color === "string" ? parsed.color : hashColor(parsed.name),
+    };
   } catch {
     return null;
   }
@@ -155,6 +145,138 @@ function scopeNotificationsForUser(notifications: Notification[], user: UserAcco
   return notifications.filter(notification => {
     const message = notification.message.toLowerCase();
     return notification.actor === user.name || notification.actor === user.email || message.includes(name) || message.includes(email);
+  });
+}
+
+function isSameDay(left: Date, right: Date) {
+  return left.getFullYear() === right.getFullYear() && left.getMonth() === right.getMonth() && left.getDate() === right.getDate();
+}
+
+function isOverdue(task: Task) {
+  if (!task.dueDate) {
+    return false;
+  }
+
+  const due = new Date(task.dueDate);
+  if (Number.isNaN(due.getTime())) {
+    return false;
+  }
+
+  return due < new Date() && task.status !== "done";
+}
+
+function getTaskStats(tasks: Task[]) {
+  const total = tasks.length;
+  const completed = tasks.filter(task => task.status === "done").length;
+  const inProgress = tasks.filter(task => task.status === "in-progress").length;
+  const review = tasks.filter(task => task.status === "review").length;
+  const todo = tasks.filter(task => task.status === "todo").length;
+  const overdue = tasks.filter(task => isOverdue(task)).length;
+
+  const cycleTimes = tasks
+    .map(task => {
+      const created = new Date(task.createdAt);
+      const due = new Date(task.dueDate);
+
+      if (Number.isNaN(created.getTime()) || Number.isNaN(due.getTime())) {
+        return null;
+      }
+
+      return Math.max(0, Math.round((due.getTime() - created.getTime()) / 86_400_000));
+    })
+    .filter((value): value is number => value !== null);
+
+  const averageCycleTime = cycleTimes.length
+    ? Math.round(cycleTimes.reduce((sum, value) => sum + value, 0) / cycleTimes.length)
+    : 0;
+
+  const completionRate = total === 0 ? 0 : Math.round((completed / total) * 100);
+  const teamVelocity = total === 0 ? 0 : Math.max(1, Math.round((completed * 2 + inProgress + review) / 2));
+
+  return {
+    total,
+    completed,
+    inProgress,
+    review,
+    todo,
+    overdue,
+    completionRate,
+    averageCycleTime,
+    teamVelocity,
+  };
+}
+
+function buildWeeklyActivity(tasks: Task[]) {
+  const today = new Date();
+
+  return Array.from({ length: 7 }, (_, index) => {
+    const day = new Date(today);
+    day.setDate(today.getDate() - (6 - index));
+
+    const created = tasks.filter(task => task.createdAt && isSameDay(new Date(task.createdAt), day)).length;
+    const completed = tasks.filter(task => task.status === "done" && task.createdAt && isSameDay(new Date(task.createdAt), day)).length;
+    const overdue = tasks.filter(task => isOverdue(task) && task.dueDate && isSameDay(new Date(task.dueDate), day)).length;
+
+    return {
+      day: day.toLocaleDateString("en-US", { weekday: "short" }),
+      created,
+      completed,
+      overdue,
+    };
+  });
+}
+
+function buildMonthlyActivity(tasks: Task[]) {
+  return Array.from({ length: 5 }, (_, index) => {
+    const month = new Date();
+    month.setMonth(month.getMonth() - (4 - index));
+
+    const monthStart = new Date(month.getFullYear(), month.getMonth(), 1);
+    const monthEnd = new Date(month.getFullYear(), month.getMonth() + 1, 1);
+
+    const completed = tasks.filter(task => task.status === "done" && new Date(task.createdAt) >= monthStart && new Date(task.createdAt) < monthEnd).length;
+    const target = Math.max(completed + 2, 4);
+
+    return {
+      month: month.toLocaleDateString("en-US", { month: "short" }),
+      completed,
+      target,
+    };
+  });
+}
+
+function buildTaskDistribution(tasks: Task[]) {
+  const stats = getTaskStats(tasks);
+
+  return [
+    { name: "Done", value: stats.completed },
+    { name: "In Progress", value: stats.inProgress },
+    { name: "Review", value: stats.review },
+    { name: "To Do", value: stats.todo },
+  ];
+}
+
+function buildVelocityData(tasks: Task[]) {
+  const today = new Date();
+
+  return Array.from({ length: 6 }, (_, index) => {
+    const week = new Date(today);
+    week.setDate(today.getDate() - (5 - index) * 7);
+
+    const start = new Date(week);
+    start.setDate(week.getDate() - week.getDay());
+    const end = new Date(start);
+    end.setDate(start.getDate() + 7);
+
+    const velocity = tasks.filter(task => {
+      const created = new Date(task.createdAt);
+      return !Number.isNaN(created.getTime()) && created >= start && created < end;
+    }).length;
+
+    return {
+      week: `W${String(index + 1).padStart(2, "0")}`,
+      velocity: Math.max(velocity, 0),
+    };
   });
 }
 
@@ -322,15 +444,30 @@ function StatCard({ label, value, trend, icon, color }: { label: string; value: 
 
 // ─── Login Page ───────────────────────────────────────────────────────────────
 
-function LoginPage({ navigate }: { navigate: (p: Page) => void }) {
-  const [email, setEmail] = useState("alex.morgan@taskflow.io");
-  const [password, setPassword] = useState("••••••••");
+function LoginPage({ navigate, onSubmit }: { navigate: (p: Page) => void; onSubmit: (payload: { email: string; password: string; remember: boolean }) => Promise<void> }) {
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
   const [remember, setRemember] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [authError, setAuthError] = useState<string | null>(null);
 
-  const handleLogin = () => {
+  const handleLogin = async () => {
+    if (!email.trim() || !password) {
+      setAuthError("Please enter both your email address and password.");
+      return;
+    }
+
     setLoading(true);
-    setTimeout(() => { setLoading(false); navigate("dashboard"); }, 900);
+    setAuthError(null);
+
+    try {
+      await onSubmit({ email: email.trim(), password, remember });
+      navigate("dashboard");
+    } catch (error) {
+      setAuthError(error instanceof Error ? error.message : "Unable to sign in.");
+    } finally {
+      setLoading(false);
+    }
   };
 
   return (
@@ -403,6 +540,11 @@ function LoginPage({ navigate }: { navigate: (p: Page) => void }) {
               </label>
               <button className="text-sm text-primary font-medium hover:underline">Forgot password?</button>
             </div>
+            {authError && (
+              <div className="rounded-xl border border-red-300 bg-red-50 px-3 py-2 text-sm text-red-700 dark:border-red-800 dark:bg-red-950/30 dark:text-red-100">
+                {authError}
+              </div>
+            )}
             <Button variant="primary" size="lg" onClick={handleLogin} disabled={loading} className="w-full mt-2">
               {loading ? <><div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />Signing in…</> : "Sign in"}
             </Button>
@@ -438,14 +580,40 @@ function LoginPage({ navigate }: { navigate: (p: Page) => void }) {
 
 // ─── Register Page ────────────────────────────────────────────────────────────
 
-function RegisterPage({ navigate }: { navigate: (p: Page) => void }) {
+function RegisterPage({ navigate, onSubmit }: { navigate: (p: Page) => void; onSubmit: (payload: { name: string; email: string; password: string }) => Promise<void> }) {
   const [form, setForm] = useState({ name: "", email: "", password: "", confirm: "" });
   const [loading, setLoading] = useState(false);
+  const [authError, setAuthError] = useState<string | null>(null);
 
   const update = (k: keyof typeof form) => (v: string) => setForm(f => ({ ...f, [k]: v }));
-  const handleRegister = () => {
+
+  const handleRegister = async () => {
+    if (!form.name.trim() || !form.email.trim() || !form.password || !form.confirm) {
+      setAuthError("Please complete all fields before creating your account.");
+      return;
+    }
+
+    if (form.password !== form.confirm) {
+      setAuthError("Passwords do not match.");
+      return;
+    }
+
+    if (form.password.length < 8) {
+      setAuthError("Password must be at least 8 characters long.");
+      return;
+    }
+
     setLoading(true);
-    setTimeout(() => { setLoading(false); navigate("dashboard"); }, 900);
+    setAuthError(null);
+
+    try {
+      await onSubmit({ name: form.name.trim(), email: form.email.trim(), password: form.password });
+      navigate("dashboard");
+    } catch (error) {
+      setAuthError(error instanceof Error ? error.message : "Unable to create account.");
+    } finally {
+      setLoading(false);
+    }
   };
 
   const strength = form.password.length > 12 ? 3 : form.password.length > 8 ? 2 : form.password.length > 4 ? 1 : 0;
@@ -477,6 +645,11 @@ function RegisterPage({ navigate }: { navigate: (p: Page) => void }) {
             )}
           </div>
           <Input label="Confirm password" type="password" placeholder="Re-enter password" value={form.confirm} onChange={update("confirm")} icon={<Shield size={16} />} required />
+          {authError && (
+            <div className="rounded-xl border border-red-300 bg-red-50 px-3 py-2 text-sm text-red-700 dark:border-red-800 dark:bg-red-950/30 dark:text-red-100">
+              {authError}
+            </div>
+          )}
           <Button variant="primary" size="lg" onClick={handleRegister} disabled={loading} className="w-full mt-2">
             {loading ? <><div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />Creating account…</> : "Create account"}
           </Button>
@@ -498,13 +671,13 @@ function RegisterPage({ navigate }: { navigate: (p: Page) => void }) {
 
 const NAV_ITEMS = [
   { id: "dashboard" as Page, label: "Dashboard", icon: <LayoutDashboard size={18} /> },
-  { id: "tasks" as Page, label: "Tasks", icon: <CheckSquare size={18} />, badge: "8" },
+  { id: "tasks" as Page, label: "Tasks", icon: <CheckSquare size={18} /> },
   { id: "analytics" as Page, label: "Analytics", icon: <BarChart2 size={18} /> },
   { id: "settings" as Page, label: "Settings", icon: <Settings size={18} /> },
 ];
 
-function Sidebar({ current, navigate, collapsed, setCollapsed, currentUser }: {
-  current: Page; navigate: (p: Page) => void; collapsed: boolean; setCollapsed: (v: boolean) => void; currentUser: UserAccount | null;
+function Sidebar({ current, navigate, collapsed, setCollapsed, currentUser, taskCount, onLogout }: {
+  current: Page; navigate: (p: Page) => void; collapsed: boolean; setCollapsed: (v: boolean) => void; currentUser: UserAccount | null; taskCount: number; onLogout: () => void;
 }) {
   return (
     <aside className={cx(
@@ -538,6 +711,7 @@ function Sidebar({ current, navigate, collapsed, setCollapsed, currentUser }: {
         {NAV_ITEMS.map(item => {
           const active = current === item.id || (item.id === "task-detail" && current === "task-detail");
           const isActive = current === item.id;
+          const badgeText = item.id === "tasks" ? String(taskCount) : item.badge;
           return (
             <button key={item.id} onClick={() => navigate(item.id)}
               className={cx(
@@ -548,8 +722,8 @@ function Sidebar({ current, navigate, collapsed, setCollapsed, currentUser }: {
               )}>
               <span className={cx("shrink-0", isActive ? "text-sidebar-primary" : "text-muted-foreground group-hover:text-foreground")}>{item.icon}</span>
               {!collapsed && <span className="text-sm truncate">{item.label}</span>}
-              {!collapsed && item.badge && (
-                <span className="ml-auto bg-primary text-primary-foreground text-xs px-1.5 py-0.5 rounded-full font-mono">{item.badge}</span>
+              {!collapsed && badgeText && (
+                <span className="ml-auto bg-primary text-primary-foreground text-xs px-1.5 py-0.5 rounded-full font-mono">{badgeText}</span>
               )}
               {collapsed && isActive && <div className="absolute right-0 top-1/2 -translate-y-1/2 w-0.5 h-5 bg-primary rounded-l-full" />}
             </button>
@@ -558,15 +732,26 @@ function Sidebar({ current, navigate, collapsed, setCollapsed, currentUser }: {
       </nav>
 
       <div className={cx("p-3 border-t border-sidebar-border", collapsed ? "flex justify-center" : "")}>
-        <div className={cx("flex items-center gap-3 p-2 rounded-xl hover:bg-muted cursor-pointer transition-colors", collapsed ? "" : "")}>
-          <Avatar name={currentUser?.name ?? "User"} color={currentUser?.color ?? "#4F46E5"} size="sm" />
+        <div className={cx("flex flex-col gap-2", collapsed ? "" : "")}> 
+          <div className={cx("flex items-center gap-3 p-2 rounded-xl hover:bg-muted cursor-pointer transition-colors", collapsed ? "" : "")}>
+            <Avatar name={currentUser?.name ?? "User"} color={currentUser?.color ?? "#4F46E5"} size="sm" />
+            {!collapsed && (
+              <div className="flex-1 min-w-0">
+                <p className="text-sm font-medium text-foreground truncate">{currentUser?.name ?? "User"}</p>
+                <p className="text-xs text-muted-foreground truncate">{currentUser?.email ?? "Sign in to view profile"}</p>
+              </div>
+            )}
+            {!collapsed && <ChevronDown size={14} className="text-muted-foreground shrink-0" />}
+          </div>
           {!collapsed && (
-            <div className="flex-1 min-w-0">
-              <p className="text-sm font-medium text-foreground truncate">{currentUser?.name ?? "User"}</p>
-              <p className="text-xs text-muted-foreground truncate">{currentUser?.email ?? "Sign in to view profile"}</p>
-            </div>
+            <button
+              onClick={onLogout}
+              className="flex items-center justify-center gap-2 rounded-xl border border-border bg-card px-3 py-2 text-sm font-medium text-foreground transition-colors hover:bg-muted"
+            >
+              <LogOut size={16} />
+              Sign out
+            </button>
           )}
-          {!collapsed && <ChevronDown size={14} className="text-muted-foreground shrink-0" />}
         </div>
       </div>
     </aside>
@@ -611,11 +796,61 @@ function Header({ title, notifCount, onNotifClick, onSearch, isDark, setIsDark, 
 
 // ─── Dashboard Page ───────────────────────────────────────────────────────────
 
-function DashboardPage({ tasks, navigate, currentUser }: { tasks: Task[]; navigate: (p: Page, id?: string) => void; currentUser: UserAccount | null }) {
+function getTeamMembers(tasks: Task[]) {
+  const teams = new Map<string, { color: string; tasks: number }>();
+
+  tasks.forEach(task => {
+    const existing = teams.get(task.assignee) ?? { color: task.assigneeColor, tasks: 0 };
+    existing.tasks += 1;
+    teams.set(task.assignee, existing);
+  });
+
+  return Array.from(teams.entries())
+    .sort((a, b) => b[1].tasks - a[1].tasks)
+    .slice(0, 4)
+    .map(([name, value]) => ({
+      name,
+      color: value.color,
+      role: "Member",
+      tasks: value.tasks,
+    }));
+}
+
+function getRecentActivity(notifications: Notification[]) {
+  const recent = notifications.slice(0, 4).map(notification => ({
+    id: notification.id,
+    actor: notification.actor,
+    actorColor: notification.actorColor,
+    action: notification.message,
+    time: notification.time,
+  }));
+
+  if (recent.length > 0) {
+    return recent;
+  }
+
+  return [{
+    id: "dashboard-empty-activity",
+    actor: "System",
+    actorColor: "#4F46E5",
+    action: "No recent activity yet. Create or update a task to populate the dashboard.",
+    time: "Just now",
+  }];
+}
+
+function DashboardPage({ tasks, notifications, navigate, currentUser }: {
+  tasks: Task[];
+  notifications: Notification[];
+  navigate: (p: Page, id?: string) => void;
+  currentUser: UserAccount | null;
+}) {
   const done = tasks.filter(t => t.status === "done").length;
   const inProgress = tasks.filter(t => t.status === "in-progress").length;
   const review = tasks.filter(t => t.status === "review").length;
   const overdue = tasks.filter(t => new Date(t.dueDate) < new Date() && t.status !== "done").length;
+  const totalTasks = Math.max(tasks.length, 1);
+  const teamMembers = getTeamMembers(tasks);
+  const recentActivity = getRecentActivity(notifications);
 
   return (
     <div className="p-6 space-y-6">
@@ -630,10 +865,10 @@ function DashboardPage({ tasks, navigate, currentUser }: { tasks: Task[]; naviga
       </div>
 
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-        <StatCard label="Total Tasks" value={String(tasks.length)} trend={12} icon={<CheckSquare size={20} />} color="#4F46E5" />
-        <StatCard label="Completed" value={String(done)} trend={8} icon={<CheckCircle2 size={20} />} color="#22C55E" />
+        <StatCard label="Total Tasks" value={String(tasks.length)} icon={<CheckSquare size={20} />} color="#4F46E5" />
+        <StatCard label="Completed" value={String(done)} icon={<CheckCircle2 size={20} />} color="#22C55E" />
         <StatCard label="In Progress" value={String(inProgress)} icon={<Activity size={20} />} color="#6366F1" />
-        <StatCard label="Overdue" value={String(overdue)} trend={-15} icon={<AlertCircle size={20} />} color="#EF4444" />
+        <StatCard label="Overdue" value={String(overdue)} icon={<AlertCircle size={20} />} color="#EF4444" />
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
@@ -643,32 +878,38 @@ function DashboardPage({ tasks, navigate, currentUser }: { tasks: Task[]; naviga
             <button onClick={() => navigate("tasks")} className="text-sm text-primary hover:underline flex items-center gap-1">View all <ChevronRight size={14} /></button>
           </div>
           <div className="flex flex-col gap-3">
-            {tasks.slice(0, 5).map(task => (
-              <Card key={task.id} className="p-4" onClick={() => navigate("task-detail", task.id)}>
-                <div className="flex items-start gap-3">
-                  <div className="mt-0.5">
-                    {task.status === "done" ? <CheckCircle2 size={18} className="text-green-500" /> :
-                      task.status === "in-progress" ? <div className="w-[18px] h-[18px] rounded-full border-2 border-primary border-t-transparent animate-spin" style={{ animationDuration: "2s" }} /> :
-                        <Circle size={18} className="text-muted-foreground" />}
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2 flex-wrap">
-                      <span className="text-sm font-medium text-foreground">{task.title}</span>
-                      <Badge priority={task.priority} />
-                    </div>
-                    <div className="flex items-center gap-3 mt-2 text-xs text-muted-foreground">
-                      <span className="font-mono">{task.id}</span>
-                      <span className="flex items-center gap-1"><Calendar size={11} />{task.dueDate}</span>
-                      <span className="flex items-center gap-1"><MessageSquare size={11} />{task.comments}</span>
-                    </div>
-                    {task.status === "in-progress" && (
-                      <div className="mt-2"><ProgressBar value={task.progress} /></div>
-                    )}
-                  </div>
-                  <Badge status={task.status} />
-                </div>
+            {tasks.length === 0 ? (
+              <Card className="p-4 text-sm text-muted-foreground">
+                No tasks are currently available for your account. Create one to see it appear here.
               </Card>
-            ))}
+            ) : (
+              tasks.slice(0, 5).map(task => (
+                <Card key={task.id} className="p-4" onClick={() => navigate("task-detail", task.id)}>
+                  <div className="flex items-start gap-3">
+                    <div className="mt-0.5">
+                      {task.status === "done" ? <CheckCircle2 size={18} className="text-green-500" /> :
+                        task.status === "in-progress" ? <div className="w-[18px] h-[18px] rounded-full border-2 border-primary border-t-transparent animate-spin" style={{ animationDuration: "2s" }} /> :
+                          <Circle size={18} className="text-muted-foreground" />}
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className="text-sm font-medium text-foreground">{task.title}</span>
+                        <Badge priority={task.priority} />
+                      </div>
+                      <div className="flex items-center gap-3 mt-2 text-xs text-muted-foreground">
+                        <span className="font-mono">{task.id}</span>
+                        <span className="flex items-center gap-1"><Calendar size={11} />{task.dueDate}</span>
+                        <span className="flex items-center gap-1"><MessageSquare size={11} />{task.comments}</span>
+                      </div>
+                      {task.status === "in-progress" && (
+                        <div className="mt-2"><ProgressBar value={task.progress} /></div>
+                      )}
+                    </div>
+                    <Badge status={task.status} />
+                  </div>
+                </Card>
+              ))
+            )}
           </div>
         </div>
 
@@ -677,9 +918,9 @@ function DashboardPage({ tasks, navigate, currentUser }: { tasks: Task[]; naviga
           <Card className="p-5">
             <div className="flex flex-col gap-4">
               {[
-                { label: "Completed", count: done, total: tasks.length, color: "bg-green-500" },
-                { label: "In Progress", count: inProgress, total: tasks.length, color: "bg-primary" },
-                { label: "Review", count: review, total: tasks.length, color: "bg-amber-500" },
+                { label: "Completed", count: done, total: totalTasks, color: "bg-green-500" },
+                { label: "In Progress", count: inProgress, total: totalTasks, color: "bg-primary" },
+                { label: "Review", count: review, total: totalTasks, color: "bg-amber-500" },
               ].map(item => (
                 <div key={item.label}>
                   <div className="flex justify-between text-sm mb-1.5">
@@ -692,24 +933,41 @@ function DashboardPage({ tasks, navigate, currentUser }: { tasks: Task[]; naviga
             </div>
           </Card>
 
+          <Card className="p-5">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="font-semibold text-foreground">Recent Activity</h3>
+              <span className="text-xs text-muted-foreground">{notifications.filter(n => !n.read).length} unread</span>
+            </div>
+            <div className="flex flex-col gap-3">
+              {recentActivity.map(item => (
+                <div key={item.id} className="flex items-start gap-3">
+                  <Avatar name={item.actor} color={item.actorColor} size="sm" />
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm text-foreground leading-snug">{item.action}</p>
+                    <p className="text-xs text-muted-foreground mt-1">{item.time}</p>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </Card>
+
           <h3 className="font-semibold text-foreground">Team Members</h3>
           <Card className="p-5">
             <div className="flex flex-col gap-3">
-              {[
-                { name: "Sarah Chen", role: "Designer", color: "#4F46E5", tasks: 2 },
-                { name: "Marcus Reid", color: "#22C55E", role: "Engineer", tasks: 1 },
-                { name: "Priya Nair", color: "#F59E0B", role: "PM", tasks: 2 },
-                { name: "James Wu", color: "#EF4444", role: "DevOps", tasks: 2 },
-              ].map(m => (
-                <div key={m.name} className="flex items-center gap-3">
-                  <Avatar name={m.name} color={m.color} size="sm" />
-                  <div className="flex-1 min-w-0">
-                    <p className="text-sm font-medium text-foreground truncate">{m.name}</p>
-                    <p className="text-xs text-muted-foreground">{m.role}</p>
+              {teamMembers.length === 0 ? (
+                <p className="text-sm text-muted-foreground">No team activity yet.</p>
+              ) : (
+                teamMembers.map(m => (
+                  <div key={m.name} className="flex items-center gap-3">
+                    <Avatar name={m.name} color={m.color} size="sm" />
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm font-medium text-foreground truncate">{m.name}</p>
+                      <p className="text-xs text-muted-foreground">{m.role}</p>
+                    </div>
+                    <span className="text-xs font-mono text-muted-foreground">{m.tasks} tasks</span>
                   </div>
-                  <span className="text-xs font-mono text-muted-foreground">{m.tasks} tasks</span>
-                </div>
-              ))}
+                ))
+              )}
             </div>
           </Card>
         </div>
@@ -862,8 +1120,8 @@ function TasksPage({ tasks, onAddTask, navigate }: {
 
 // ─── Task Modal ───────────────────────────────────────────────────────────────
 
-function TaskModal({ onClose, onSave, editTask }: {
-  onClose: () => void; onSave: (t: Partial<Task>) => Promise<void>; editTask?: Task;
+function TaskModal({ onClose, onSave, editTask, currentUser }: {
+  onClose: () => void; onSave: (t: Partial<Task>) => Promise<void>; editTask?: Task; currentUser: UserAccount | null;
 }) {
   const [form, setForm] = useState({
     title: editTask?.title ?? "",
@@ -871,7 +1129,7 @@ function TaskModal({ onClose, onSave, editTask }: {
     status: editTask?.status ?? "todo" as Status,
     priority: editTask?.priority ?? "medium" as Priority,
     dueDate: editTask?.dueDate ?? "",
-    assignee: editTask?.assignee ?? "",
+    assignee: editTask?.assignee ?? currentUser?.name ?? "",
     tags: editTask?.tags.join(", ") ?? "",
   });
   const [dragging, setDragging] = useState(false);
@@ -932,14 +1190,12 @@ function TaskModal({ onClose, onSave, editTask }: {
             </div>
             <div className="flex flex-col gap-1.5">
               <label className="text-sm font-medium text-foreground">Assignee</label>
-              <select value={form.assignee} onChange={e => update("assignee")(e.target.value)}
-                className="bg-input-background border border-border rounded-xl px-3 py-2.5 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-ring/40 focus:border-primary transition-all">
-                <option value="">Unassigned</option>
-                <option>Sarah Chen</option>
-                <option>Marcus Reid</option>
-                <option>Priya Nair</option>
-                <option>James Wu</option>
-              </select>
+              <input
+                value={currentUser?.name ?? "You"}
+                readOnly
+                className="bg-input-background border border-border rounded-xl px-3 py-2.5 text-sm text-foreground focus:outline-none"
+              />
+              <p className="text-xs text-muted-foreground">Tasks are saved to your account and can be shared later.</p>
             </div>
           </div>
 
@@ -1269,21 +1525,26 @@ function NotificationsPanel({ notifs, onClose, onMarkAll }: {
 
 // ─── Analytics Page ───────────────────────────────────────────────────────────
 
-function AnalyticsPage() {
+function AnalyticsPage({ tasks }: { tasks: Task[] }) {
   const COLORS = ["#22C55E", "#4F46E5", "#F59E0B", "#94A3B8"];
+  const stats = getTaskStats(tasks);
+  const weeklyActivity = buildWeeklyActivity(tasks);
+  const monthlyActivity = buildMonthlyActivity(tasks);
+  const distribution = buildTaskDistribution(tasks);
+  const velocityData = buildVelocityData(tasks);
 
   return (
     <div className="p-6 space-y-6">
       <div>
         <h2 className="text-xl font-bold text-foreground">Analytics</h2>
-        <p className="text-sm text-muted-foreground">Performance metrics for the last 30 days</p>
+        <p className="text-sm text-muted-foreground">Performance metrics derived from your current task data</p>
       </div>
 
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-        <StatCard label="Completion Rate" value="78%" trend={5} icon={<TrendingUp size={20} />} color="#22C55E" />
-        <StatCard label="Avg. Cycle Time" value="3.2d" trend={-12} icon={<Clock size={20} />} color="#4F46E5" />
-        <StatCard label="Team Velocity" value="42" trend={18} icon={<Zap size={20} />} color="#F59E0B" />
-        <StatCard label="Blocked Tasks" value="3" trend={-40} icon={<AlertCircle size={20} />} color="#EF4444" />
+        <StatCard label="Completion Rate" value={`${stats.completionRate}%`} trend={0} icon={<TrendingUp size={20} />} color="#22C55E" />
+        <StatCard label="Avg. Cycle Time" value={`${stats.averageCycleTime}d`} icon={<Clock size={20} />} color="#4F46E5" />
+        <StatCard label="Team Velocity" value={String(stats.teamVelocity)} icon={<Zap size={20} />} color="#F59E0B" />
+        <StatCard label="Blocked Tasks" value={String(stats.overdue)} icon={<AlertCircle size={20} />} color="#EF4444" />
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
@@ -1298,7 +1559,7 @@ function AnalyticsPage() {
               </div>
             </div>
             <ResponsiveContainer width="100%" height={220}>
-              <BarChart data={analyticsWeekly} barSize={20}>
+              <BarChart data={weeklyActivity} barSize={20}>
                 <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
                 <XAxis dataKey="day" tick={{ fontSize: 12, fill: "var(--muted-foreground)" }} axisLine={false} tickLine={false} />
                 <YAxis tick={{ fontSize: 12, fill: "var(--muted-foreground)" }} axisLine={false} tickLine={false} />
@@ -1315,18 +1576,18 @@ function AnalyticsPage() {
           <h3 className="font-semibold text-foreground mb-4">Task Distribution</h3>
           <ResponsiveContainer width="100%" height={180}>
             <PieChart>
-              <Pie data={analyticsPie} innerRadius={50} outerRadius={80} paddingAngle={3} dataKey="value">
-                {analyticsPie.map((entry, idx) => <Cell key={idx} fill={COLORS[idx]} />)}
+              <Pie data={distribution} innerRadius={50} outerRadius={80} paddingAngle={3} dataKey="value">
+                {distribution.map((entry, idx) => <Cell key={idx} fill={COLORS[idx]} />)}
               </Pie>
               <Tooltip contentStyle={{ background: "var(--card)", border: "1px solid var(--border)", borderRadius: "12px", fontSize: "12px" }} />
             </PieChart>
           </ResponsiveContainer>
           <div className="flex flex-col gap-2 mt-2">
-            {analyticsPie.map((item, i) => (
+            {distribution.map((item, i) => (
               <div key={item.name} className="flex items-center gap-2 text-sm">
                 <div className="w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: COLORS[i] }} />
                 <span className="text-muted-foreground flex-1">{item.name}</span>
-                <span className="font-mono font-medium text-foreground">{item.value}%</span>
+                <span className="font-mono font-medium text-foreground">{item.value}</span>
               </div>
             ))}
           </div>
@@ -1337,7 +1598,7 @@ function AnalyticsPage() {
         <Card className="p-5">
           <h3 className="font-semibold text-foreground mb-4">Monthly Completion vs Target</h3>
           <ResponsiveContainer width="100%" height={200}>
-            <AreaChart data={analyticsMonthly}>
+            <AreaChart data={monthlyActivity}>
               <defs>
                 <linearGradient id="completedGrad" x1="0" y1="0" x2="0" y2="1">
                   <stop offset="5%" stopColor="#4F46E5" stopOpacity={0.15} />
@@ -1373,10 +1634,23 @@ function AnalyticsPage() {
 
 // ─── Settings Page ────────────────────────────────────────────────────────────
 
-function SettingsPage({ isDark, setIsDark }: { isDark: boolean; setIsDark: (v: boolean) => void }) {
-  const [profile, setProfile] = useState({ name: "Alex Morgan", email: "alex.morgan@taskflow.io", role: "Product Designer", bio: "Designing user-centric products with a focus on accessibility and clarity." });
+function SettingsPage({ isDark, setIsDark, currentUser }: { isDark: boolean; setIsDark: (v: boolean) => void; currentUser: UserAccount | null }) {
+  const [profile, setProfile] = useState({ name: "", email: "", role: "Workspace Member", bio: "Manage your tasks and stay on top of your workflow." });
   const [notifPrefs, setNotifPrefs] = useState({ mentions: true, deadlines: true, tasks: true, digests: false });
   const [saved, setSaved] = useState(false);
+
+  useEffect(() => {
+    if (!currentUser) {
+      return;
+    }
+
+    setProfile({
+      name: currentUser.name,
+      email: currentUser.email,
+      role: "Workspace Member",
+      bio: `Managing your TaskFlow workspace as ${currentUser.name}.`,
+    });
+  }, [currentUser]);
 
   const handleSave = () => { setSaved(true); setTimeout(() => setSaved(false), 2000); };
   const update = (k: keyof typeof profile) => (v: string) => setProfile(p => ({ ...p, [k]: v }));
@@ -1564,10 +1838,28 @@ export default function App() {
   const unreadCount = notifications.filter(n => !n.read).length;
   const selectedTask = tasks.find(t => t.id === selectedTaskId) ?? tasks[0];
 
-  const handleAuthSuccess = async (user: UserAccount, remember: boolean) => {
-    setCurrentUser(user);
-    persistCurrentUser(user, remember);
-    setApiError(null);
+  const handleLogin = async ({ email, password, remember }: { email: string; password: string; remember: boolean }) => {
+    try {
+      const response = await loginUser({ email, password });
+      setCurrentUser(response.user);
+      persistCurrentUser(response.user, remember);
+      setApiError(null);
+    } catch (error) {
+      setApiError(error instanceof Error ? error.message : "Unable to sign in.");
+      throw error;
+    }
+  };
+
+  const handleRegister = async ({ name, email, password }: { name: string; email: string; password: string }) => {
+    try {
+      const response = await registerUser({ name, email, password });
+      setCurrentUser(response.user);
+      persistCurrentUser(response.user, true);
+      setApiError(null);
+    } catch (error) {
+      setApiError(error instanceof Error ? error.message : "Unable to create account.");
+      throw error;
+    }
   };
 
   const refreshNotifications = async () => {
@@ -1583,6 +1875,16 @@ export default function App() {
     }
   };
 
+  const handleLogout = () => {
+    persistCurrentUser(null, false);
+    setCurrentUser(null);
+    setSelectedTaskId(null);
+    setShowNotifs(false);
+    setEditTask(undefined);
+    setApiError(null);
+    setPage("login");
+  };
+
   const handleSaveTask = async (data: Partial<Task>) => {
     if (!currentUser) {
       setApiError("Sign in to create or edit tasks.");
@@ -1592,27 +1894,35 @@ export default function App() {
     try {
       setApiError(null);
 
+      const defaultDueDate = new Date().toISOString().slice(0, 10);
+      const normalizedAssignee = currentUser.name.trim();
+      const normalizedDescription = (data.description ?? "").toString().trim() || "No description provided.";
+      const normalizedDueDate = (data.dueDate ?? defaultDueDate).toString().trim() || defaultDueDate;
+      const normalizedTags = typeof data.tags === "string"
+        ? data.tags.split(",").map((item) => item.trim()).filter(Boolean)
+        : data.tags ?? [];
+
       if (editTask) {
         const updatedTask = await updateTask(editTask.id, {
           title: data.title ?? editTask.title,
-          description: data.description ?? editTask.description,
+          description: normalizedDescription,
           status: data.status ?? editTask.status,
           priority: data.priority ?? editTask.priority,
-          dueDate: data.dueDate ?? editTask.dueDate,
-          assignee: data.assignee ?? editTask.assignee,
-          tags: typeof data.tags === "string" ? data.tags.split(",").map((item) => item.trim()).filter(Boolean) : data.tags ?? editTask.tags,
+          dueDate: normalizedDueDate,
+          assignee: normalizedAssignee,
+          tags: normalizedTags,
         });
 
         setTasks(ts => scopeTasksForUser(ts.map(task => (task.id === updatedTask.id ? updatedTask : task)), currentUser));
       } else {
         const createdTask = await createTask({
           title: data.title ?? "Untitled Task",
-          description: data.description ?? "",
+          description: normalizedDescription,
           status: data.status ?? "todo",
           priority: data.priority ?? "medium",
-          dueDate: data.dueDate ?? "",
-          assignee: data.assignee ?? currentUser.name,
-          tags: typeof data.tags === "string" ? data.tags.split(",").map((item) => item.trim()).filter(Boolean) : data.tags ?? [],
+          dueDate: normalizedDueDate,
+          assignee: normalizedAssignee,
+          tags: normalizedTags,
         });
 
         setTasks(ts => scopeTasksForUser([createdTask, ...ts], currentUser));
@@ -1674,13 +1984,21 @@ export default function App() {
 
   if (isAuthPage) {
     return page === "login"
-      ? <LoginPage navigate={navigate} onLogin={handleAuthSuccess} />
-      : <RegisterPage navigate={navigate} onRegister={handleAuthSuccess} />;
+      ? <LoginPage navigate={navigate} onSubmit={handleLogin} />
+      : <RegisterPage navigate={navigate} onSubmit={handleRegister} />;
   }
 
   return (
     <div className="flex h-screen bg-background overflow-hidden" style={{ fontFamily: "var(--font-sans)" }}>
-      <Sidebar current={page} navigate={navigate} collapsed={collapsed} setCollapsed={setCollapsed} currentUser={currentUser} />
+      <Sidebar
+        current={page}
+        navigate={navigate}
+        collapsed={collapsed}
+        setCollapsed={setCollapsed}
+        currentUser={currentUser}
+        taskCount={tasks.length}
+        onLogout={handleLogout}
+      />
 
       <div className="flex-1 flex flex-col min-w-0">
         <Header
@@ -1700,7 +2018,7 @@ export default function App() {
         )}
 
         <main className="flex-1 overflow-y-auto scrollbar-thin scrollbar-thumb-border">
-          {page === "dashboard" && <DashboardPage tasks={tasks} navigate={navigate} />}
+          {page === "dashboard" && <DashboardPage tasks={tasks} notifications={notifications} navigate={navigate} currentUser={currentUser} />}
           {page === "tasks" && (
             <TasksPage tasks={tasks} onAddTask={() => { setEditTask(undefined); setShowModal(true); }} navigate={navigate} />
           )}
@@ -1713,8 +2031,8 @@ export default function App() {
               onShare={handleShareTask}
             />
           )}
-          {page === "analytics" && <AnalyticsPage />}
-          {page === "settings" && <SettingsPage isDark={isDark} setIsDark={setIsDark} />}
+          {page === "analytics" && <AnalyticsPage tasks={tasks} />}
+          {page === "settings" && <SettingsPage isDark={isDark} setIsDark={setIsDark} currentUser={currentUser} />}
         </main>
       </div>
 
@@ -1733,6 +2051,7 @@ export default function App() {
             setEditTask(undefined);
           }}
           editTask={editTask}
+          currentUser={currentUser}
           onSave={handleSaveTask}
         />
       )}

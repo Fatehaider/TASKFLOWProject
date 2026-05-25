@@ -25,6 +25,13 @@ export type NotificationRecord = {
   actorColor: string;
 };
 
+export type AuthUser = {
+  id: string;
+  name: string;
+  email: string;
+  color: string;
+};
+
 export type TaskPayload = {
   title: string;
   description: string;
@@ -36,6 +43,17 @@ export type TaskPayload = {
   progress?: number;
   attachments?: number;
   comments?: number;
+};
+
+export type RegisterPayload = {
+  name: string;
+  email: string;
+  password: string;
+};
+
+export type LoginPayload = {
+  email: string;
+  password: string;
 };
 
 const API_BASE = import.meta.env.VITE_API_URL || "/api";
@@ -56,6 +74,20 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   }
 
   return data as T;
+}
+
+export async function registerUser(payload: RegisterPayload): Promise<{ user: AuthUser }> {
+  return request<{ user: AuthUser }>('/auth/register', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function loginUser(payload: LoginPayload): Promise<{ user: AuthUser }> {
+  return request<{ user: AuthUser }>('/auth/login', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
 }
 
 export async function listTasks(): Promise<TaskRecord[]> {
