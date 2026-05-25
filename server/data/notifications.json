@@ -1,0 +1,74 @@
+[
+  {
+    "id": "N-71110949",
+    "type": "task",
+    "message": "Sarah Chen shared \"Redesign user onboarding flow\" with API Tester.",
+    "time": "Just now",
+    "read": false,
+    "actor": "API Tester",
+    "actorColor": "#4F46E5"
+  },
+  {
+    "id": "N-5864b2e8",
+    "type": "task",
+    "message": "New task created: API Smoke Test",
+    "time": "Just now",
+    "read": false,
+    "actor": "System",
+    "actorColor": "#6366F1"
+  },
+  {
+    "id": "N-001",
+    "type": "mention",
+    "message": "Sarah Chen mentioned you in T-001: \"Need @you to review the wireframes\"",
+    "time": "5m ago",
+    "read": false,
+    "actor": "SC",
+    "actorColor": "#4F46E5"
+  },
+  {
+    "id": "N-002",
+    "type": "deadline",
+    "message": "T-007 Mobile accessibility audit is due in 5 days",
+    "time": "1h ago",
+    "read": false,
+    "actor": "⚠",
+    "actorColor": "#F59E0B"
+  },
+  {
+    "id": "N-003",
+    "type": "task",
+    "message": "Marcus Reid completed Stripe payment gateway integration",
+    "time": "2h ago",
+    "read": false,
+    "actor": "MR",
+    "actorColor": "#22C55E"
+  },
+  {
+    "id": "N-004",
+    "type": "task",
+    "message": "James Wu added you as a collaborator on T-004",
+    "time": "4h ago",
+    "read": true,
+    "actor": "JW",
+    "actorColor": "#EF4444"
+  },
+  {
+    "id": "N-005",
+    "type": "system",
+    "message": "Your storage is at 80% capacity. Consider upgrading your plan.",
+    "time": "1d ago",
+    "read": true,
+    "actor": "⚡",
+    "actorColor": "#6366F1"
+  },
+  {
+    "id": "N-006",
+    "type": "mention",
+    "message": "Priya Nair assigned T-003 to you for review",
+    "time": "1d ago",
+    "read": true,
+    "actor": "PN",
+    "actorColor": "#F59E0B"
+  }
+]

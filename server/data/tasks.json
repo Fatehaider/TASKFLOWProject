@@ -1,0 +1,87 @@
+[
+  {
+    "id": "T-001",
+    "title": "Redesign user onboarding flow",
+    "description": "Create a new onboarding experience that reduces time-to-value for new users by 40%. Includes interactive tooltips, progress tracking, and personalized checklists.",
+    "status": "in-progress",
+    "priority": "high",
+    "dueDate": "2026-06-15",
+    "assignee": "Sarah Chen",
+    "assigneeColor": "#4F46E5",
+    "tags": [
+      "design",
+      "ux"
+    ],
+    "progress": 65,
+    "attachments": 3,
+    "comments": 8,
+    "createdAt": "2026-05-01",
+    "shared": [
+      "Marcus Reid",
+      "Priya Nair",
+      "API Tester"
+    ]
+  },
+  {
+    "id": "T-002",
+    "title": "Integrate Stripe payment gateway",
+    "description": "Connect payment processing to support subscriptions, one-time payments, and invoice generation. Handle webhooks for all payment lifecycle events.",
+    "status": "done",
+    "priority": "critical",
+    "dueDate": "2026-05-20",
+    "assignee": "Marcus Reid",
+    "assigneeColor": "#22C55E",
+    "tags": [
+      "backend",
+      "payments"
+    ],
+    "progress": 100,
+    "attachments": 2,
+    "comments": 14,
+    "createdAt": "2026-04-18",
+    "shared": [
+      "Sarah Chen"
+    ]
+  },
+  {
+    "id": "T-003",
+    "title": "Write API documentation",
+    "description": "Document all REST endpoints with request/response examples, authentication flows, rate limiting, and error codes. Target: OpenAPI 3.0 spec.",
+    "status": "review",
+    "priority": "medium",
+    "dueDate": "2026-06-01",
+    "assignee": "Priya Nair",
+    "assigneeColor": "#F59E0B",
+    "tags": [
+      "docs",
+      "api"
+    ],
+    "progress": 80,
+    "attachments": 1,
+    "comments": 3,
+    "createdAt": "2026-05-05",
+    "shared": [
+      "Marcus Reid",
+      "James Wu"
+    ]
+  },
+  {
+    "id": "T-004",
+    "title": "Set up CI/CD pipeline",
+    "description": "Configure GitHub Actions for automated testing, linting, and deployment to staging and production environments. Include rollback procedures.",
+    "status": "todo",
+    "priority": "high",
+    "dueDate": "2026-06-10",
+    "assignee": "James Wu",
+    "assigneeColor": "#EF4444",
+    "tags": [
+      "devops",
+      "infra"
+    ],
+    "progress": 0,
+    "attachments": 0,
+    "comments": 2,
+    "createdAt": "2026-05-10",
+    "shared": []
+  }
+]

@@ -12,6 +12,7 @@ import {
   BarChart, Bar, LineChart, Line, PieChart, Pie, Cell,
   XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, Area, AreaChart
 } from "recharts";
+import { createTask, deleteTask, listNotifications, listTasks, shareTask, updateTask } from "../lib/taskApi";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -782,7 +783,7 @@ function TasksPage({ tasks, onAddTask, navigate }: {
 // ─── Task Modal ───────────────────────────────────────────────────────────────
 
 function TaskModal({ onClose, onSave, editTask }: {
-  onClose: () => void; onSave: (t: Partial<Task>) => void; editTask?: Task;
+  onClose: () => void; onSave: (t: Partial<Task>) => Promise<void>; editTask?: Task;
 }) {
   const [form, setForm] = useState({
     title: editTask?.title ?? "",
@@ -795,6 +796,7 @@ function TaskModal({ onClose, onSave, editTask }: {
   });
   const [dragging, setDragging] = useState(false);
   const [files, setFiles] = useState<string[]>([]);
+  const [isSaving, setIsSaving] = useState(false);
   const update = (k: keyof typeof form) => (v: string) => setForm(f => ({ ...f, [k]: v }));
 
   return (
@@ -892,8 +894,20 @@ function TaskModal({ onClose, onSave, editTask }: {
 
         <div className="flex items-center justify-end gap-3 p-6 border-t border-border sticky bottom-0 bg-card">
           <Button variant="outline" onClick={onClose}>Cancel</Button>
-          <Button variant="primary" onClick={() => { onSave(form); onClose(); }}>
-            {editTask ? "Save Changes" : "Create Task"}
+          <Button
+            variant="primary"
+            disabled={isSaving}
+            onClick={async () => {
+              setIsSaving(true);
+              try {
+                await onSave(form);
+                onClose();
+              } finally {
+                setIsSaving(false);
+              }
+            }}
+          >
+            {isSaving ? "Saving…" : editTask ? "Save Changes" : "Create Task"}
           </Button>
         </div>
       </div>
@@ -903,9 +917,32 @@ function TaskModal({ onClose, onSave, editTask }: {
 
 // ─── Task Detail Page ─────────────────────────────────────────────────────────
 
-function TaskDetailPage({ task, navigate, onEdit }: { task: Task; navigate: (p: Page) => void; onEdit: () => void }) {
+function TaskDetailPage({ task, navigate, onEdit, onDelete, onShare }: {
+  task: Task;
+  navigate: (p: Page) => void;
+  onEdit: () => void;
+  onDelete: () => void;
+  onShare: (userName: string) => Promise<void>;
+}) {
   const [showShare, setShowShare] = useState(false);
   const [comment, setComment] = useState("");
+  const [shareValue, setShareValue] = useState("");
+  const [isSharing, setIsSharing] = useState(false);
+
+  const handleShare = async () => {
+    if (!shareValue.trim()) {
+      return;
+    }
+
+    setIsSharing(true);
+    try {
+      await onShare(shareValue.trim());
+      setShareValue("");
+      setShowShare(false);
+    } finally {
+      setIsSharing(false);
+    }
+  };
 
   return (
     <div className="p-6 max-w-5xl mx-auto">
@@ -930,6 +967,7 @@ function TaskDetailPage({ task, navigate, onEdit }: { task: Task; navigate: (p: 
               <div className="flex items-center gap-2 shrink-0">
                 <Button variant="outline" size="sm" onClick={() => setShowShare(!showShare)}><Share2 size={14} /> Share</Button>
                 <Button variant="primary" size="sm" onClick={onEdit}><Edit2 size={14} /> Edit</Button>
+                <Button variant="danger" size="sm" onClick={onDelete}>Delete</Button>
               </div>
             </div>
             <p className="text-sm text-muted-foreground leading-relaxed">{task.description}</p>
@@ -946,8 +984,13 @@ function TaskDetailPage({ task, navigate, onEdit }: { task: Task; navigate: (p: 
             <Card className="p-5">
               <h3 className="font-semibold text-foreground mb-3">Share Task</h3>
               <div className="flex gap-2 mb-4">
-                <input placeholder="Invite by email…" className="flex-1 bg-input-background border border-border rounded-xl px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring/40" />
-                <Button variant="primary" size="sm">Invite</Button>
+                <input
+                  value={shareValue}
+                  onChange={(e) => setShareValue(e.target.value)}
+                  placeholder="Invite by name or email…"
+                  className="flex-1 bg-input-background border border-border rounded-xl px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring/40"
+                />
+                <Button variant="primary" size="sm" disabled={isSharing} onClick={handleShare}>{isSharing ? "Sharing…" : "Invite"}</Button>
               </div>
               <div className="flex flex-col gap-2">
                 {["Alex Morgan", ...task.shared].map((name, i) => (
@@ -1377,10 +1420,42 @@ export default function App() {
   const [tasks, setTasks] = useState<Task[]>(TASKS);
   const [notifications, setNotifications] = useState<Notification[]>(NOTIFICATIONS);
   const [editTask, setEditTask] = useState<Task | undefined>();
+  const [apiError, setApiError] = useState<string | null>(null);
 
   useEffect(() => {
     document.documentElement.classList.toggle("dark", isDark);
   }, [isDark]);
+
+  useEffect(() => {
+    let mounted = true;
+
+    const loadData = async () => {
+      try {
+        const [serverTasks, serverNotifications] = await Promise.all([
+          listTasks(),
+          listNotifications(),
+        ]);
+
+        if (!mounted) {
+          return;
+        }
+
+        setTasks(serverTasks);
+        setNotifications(serverNotifications);
+        setApiError(null);
+      } catch (error) {
+        if (mounted) {
+          setApiError("Backend is unavailable. Showing local sample data until the API is running.");
+        }
+      }
+    };
+
+    loadData();
+
+    return () => {
+      mounted = false;
+    };
+  }, []);
 
   const navigate = (p: Page, id?: string) => {
     if (id) setSelectedTaskId(id);
@@ -1390,6 +1465,88 @@ export default function App() {
 
   const unreadCount = notifications.filter(n => !n.read).length;
   const selectedTask = tasks.find(t => t.id === selectedTaskId) ?? tasks[0];
+
+  const refreshNotifications = async () => {
+    try {
+      setNotifications(await listNotifications());
+    } catch {
+      // Ignore notification refresh failures and keep the current local state.
+    }
+  };
+
+  const handleSaveTask = async (data: Partial<Task>) => {
+    try {
+      setApiError(null);
+
+      if (editTask) {
+        const updatedTask = await updateTask(editTask.id, {
+          title: data.title ?? editTask.title,
+          description: data.description ?? editTask.description,
+          status: data.status ?? editTask.status,
+          priority: data.priority ?? editTask.priority,
+          dueDate: data.dueDate ?? editTask.dueDate,
+          assignee: data.assignee ?? editTask.assignee,
+          tags: typeof data.tags === "string" ? data.tags.split(",").map((item) => item.trim()).filter(Boolean) : data.tags ?? editTask.tags,
+        });
+
+        setTasks(ts => ts.map(task => (task.id === updatedTask.id ? updatedTask : task)));
+      } else {
+        const createdTask = await createTask({
+          title: data.title ?? "Untitled Task",
+          description: data.description ?? "",
+          status: data.status ?? "todo",
+          priority: data.priority ?? "medium",
+          dueDate: data.dueDate ?? "",
+          assignee: data.assignee ?? "Unassigned",
+          tags: typeof data.tags === "string" ? data.tags.split(",").map((item) => item.trim()).filter(Boolean) : data.tags ?? [],
+        });
+
+        setTasks(ts => [createdTask, ...ts]);
+      }
+
+      await refreshNotifications();
+    } catch (error) {
+      setApiError(error instanceof Error ? error.message : "Unable to save task.");
+      throw error;
+    }
+  };
+
+  const handleDeleteTask = async () => {
+    if (!selectedTask) {
+      return;
+    }
+
+    if (!window.confirm(`Delete ${selectedTask.title}?`)) {
+      return;
+    }
+
+    try {
+      await deleteTask(selectedTask.id);
+      setTasks(ts => ts.filter(task => task.id !== selectedTask.id));
+      setSelectedTaskId(null);
+      setPage("tasks");
+      await refreshNotifications();
+      setApiError(null);
+    } catch (error) {
+      setApiError(error instanceof Error ? error.message : "Unable to delete task.");
+    }
+  };
+
+  const handleShareTask = async (userName: string) => {
+    if (!selectedTask) {
+      return;
+    }
+
+    try {
+      const updatedTask = await shareTask(selectedTask.id, userName);
+      setTasks(ts => ts.map(task => (task.id === updatedTask.id ? updatedTask : task)));
+      await refreshNotifications();
+      setApiError(null);
+    } catch (error) {
+      setApiError(error instanceof Error ? error.message : "Unable to share task.");
+      throw error;
+    }
+  };
 
   const pageTitles: Partial<Record<Page, string>> = {
     dashboard: "Dashboard",
@@ -1421,13 +1578,25 @@ export default function App() {
           setIsDark={setIsDark}
         />
 
+        {apiError && (
+          <div className="mx-6 mt-4 rounded-xl border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900 dark:border-amber-800 dark:bg-amber-900/30 dark:text-amber-100">
+            {apiError}
+          </div>
+        )}
+
         <main className="flex-1 overflow-y-auto scrollbar-thin scrollbar-thumb-border">
           {page === "dashboard" && <DashboardPage tasks={tasks} navigate={navigate} />}
           {page === "tasks" && (
             <TasksPage tasks={tasks} onAddTask={() => { setEditTask(undefined); setShowModal(true); }} navigate={navigate} />
           )}
           {page === "task-detail" && selectedTask && (
-            <TaskDetailPage task={selectedTask} navigate={navigate} onEdit={() => { setEditTask(selectedTask); setShowModal(true); }} />
+            <TaskDetailPage
+              task={selectedTask}
+              navigate={navigate}
+              onEdit={() => { setEditTask(selectedTask); setShowModal(true); }}
+              onDelete={handleDeleteTask}
+              onShare={handleShareTask}
+            />
           )}
           {page === "analytics" && <AnalyticsPage />}
           {page === "settings" && <SettingsPage isDark={isDark} setIsDark={setIsDark} />}
@@ -1444,31 +1613,12 @@ export default function App() {
 
       {showModal && (
         <TaskModal
-          onClose={() => setShowModal(false)}
-          editTask={editTask}
-          onSave={(data) => {
-            if (editTask) {
-              setTasks(ts => ts.map(t => t.id === editTask.id ? { ...t, ...data } as Task : t));
-            } else {
-              const newTask: Task = {
-                id: `T-00${tasks.length + 1}`,
-                title: data.title ?? "Untitled Task",
-                description: data.description ?? "",
-                status: (data.status as Status) ?? "todo",
-                priority: (data.priority as Priority) ?? "medium",
-                dueDate: data.dueDate ?? "",
-                assignee: data.assignee ?? "Unassigned",
-                assigneeColor: "#94A3B8",
-                tags: typeof data.tags === "string" ? data.tags.split(",").map(s => s.trim()).filter(Boolean) : [],
-                progress: 0,
-                attachments: 0,
-                comments: 0,
-                createdAt: new Date().toISOString().split("T")[0],
-                shared: [],
-              };
-              setTasks(ts => [newTask, ...ts]);
-            }
+          onClose={() => {
+            setShowModal(false);
+            setEditTask(undefined);
           }}
+          editTask={editTask}
+          onSave={handleSaveTask}
         />
       )}
     </div>
