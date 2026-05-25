@@ -56,27 +56,107 @@ interface ActivityItem {
   detail?: string;
 }
 
-// ─── Sample Data ──────────────────────────────────────────────────────────────
+interface UserAccount {
+  name: string;
+  email: string;
+  password: string;
+  color: string;
+}
 
-const TASKS: Task[] = [
-  { id: "T-001", title: "Redesign user onboarding flow", description: "Create a new onboarding experience that reduces time-to-value for new users by 40%. Includes interactive tooltips, progress tracking, and personalized checklists.", status: "in-progress", priority: "high", dueDate: "2026-06-15", assignee: "Sarah Chen", assigneeColor: "#4F46E5", tags: ["design", "ux"], progress: 65, attachments: 3, comments: 8, createdAt: "2026-05-01", shared: ["Marcus Reid", "Priya Nair"] },
-  { id: "T-002", title: "Integrate Stripe payment gateway", description: "Connect payment processing to support subscriptions, one-time payments, and invoice generation. Handle webhooks for all payment lifecycle events.", status: "done", priority: "critical", dueDate: "2026-05-20", assignee: "Marcus Reid", assigneeColor: "#22C55E", tags: ["backend", "payments"], progress: 100, attachments: 2, comments: 14, createdAt: "2026-04-18", shared: ["Sarah Chen"] },
-  { id: "T-003", title: "Write API documentation", description: "Document all REST endpoints with request/response examples, authentication flows, rate limiting, and error codes. Target: OpenAPI 3.0 spec.", status: "review", priority: "medium", dueDate: "2026-06-01", assignee: "Priya Nair", assigneeColor: "#F59E0B", tags: ["docs", "api"], progress: 80, attachments: 1, comments: 3, createdAt: "2026-05-05", shared: ["Marcus Reid", "James Wu"] },
-  { id: "T-004", title: "Set up CI/CD pipeline", description: "Configure GitHub Actions for automated testing, linting, and deployment to staging and production environments. Include rollback procedures.", status: "todo", priority: "high", dueDate: "2026-06-10", assignee: "James Wu", assigneeColor: "#EF4444", tags: ["devops", "infra"], progress: 0, attachments: 0, comments: 2, createdAt: "2026-05-10", shared: [] },
-  { id: "T-005", title: "Build real-time notifications", description: "Implement WebSocket-based notifications for task updates, mentions, and deadline reminders across all connected clients.", status: "in-progress", priority: "medium", dueDate: "2026-06-20", assignee: "Sarah Chen", assigneeColor: "#4F46E5", tags: ["backend", "realtime"], progress: 40, attachments: 0, comments: 5, createdAt: "2026-05-08", shared: ["James Wu"] },
-  { id: "T-006", title: "A/B test new pricing page", description: "Run a 50/50 split test on the redesigned pricing page to measure conversion rate impact. Define success metrics and set up tracking.", status: "todo", priority: "low", dueDate: "2026-07-01", assignee: "Priya Nair", assigneeColor: "#F59E0B", tags: ["marketing", "analytics"], progress: 0, attachments: 4, comments: 1, createdAt: "2026-05-12", shared: [] },
-  { id: "T-007", title: "Mobile app accessibility audit", description: "Audit the iOS and Android apps against WCAG 2.1 AA standards. Identify and remediate contrast, focus, and screen reader issues.", status: "review", priority: "high", dueDate: "2026-05-30", assignee: "Marcus Reid", assigneeColor: "#22C55E", tags: ["mobile", "a11y"], progress: 90, attachments: 6, comments: 11, createdAt: "2026-04-25", shared: ["Sarah Chen", "Priya Nair"] },
-  { id: "T-008", title: "Data export feature (CSV/PDF)", description: "Allow users to export task lists, reports, and analytics data in CSV and PDF formats with customizable date ranges and filters.", status: "todo", priority: "medium", dueDate: "2026-06-25", assignee: "James Wu", assigneeColor: "#EF4444", tags: ["feature", "backend"], progress: 0, attachments: 1, comments: 0, createdAt: "2026-05-14", shared: [] },
-];
+const AUTH_USERS_KEY = "taskflow-users";
+const AUTH_CURRENT_USER_KEY = "taskflow-current-user";
 
-const NOTIFICATIONS: Notification[] = [
-  { id: "N-001", type: "mention", message: "Sarah Chen mentioned you in T-001: 'Need @you to review the wireframes'", time: "5m ago", read: false, actor: "SC", actorColor: "#4F46E5" },
-  { id: "N-002", type: "deadline", message: "T-007 Mobile accessibility audit is due in 5 days", time: "1h ago", read: false, actor: "⚠", actorColor: "#F59E0B" },
-  { id: "N-003", type: "task", message: "Marcus Reid completed Stripe payment gateway integration", time: "2h ago", read: false, actor: "MR", actorColor: "#22C55E" },
-  { id: "N-004", type: "task", message: "James Wu added you as a collaborator on T-004", time: "4h ago", read: true, actor: "JW", actorColor: "#EF4444" },
-  { id: "N-005", type: "system", message: "Your storage is at 80% capacity. Consider upgrading your plan.", time: "1d ago", read: true, actor: "⚡", actorColor: "#6366F1" },
-  { id: "N-006", type: "mention", message: "Priya Nair assigned T-003 to you for review", time: "1d ago", read: true, actor: "PN", actorColor: "#F59E0B" },
-];
+function hashColor(value: string) {
+  let hash = 0;
+
+  for (let index = 0; index < value.length; index += 1) {
+    hash = value.charCodeAt(index) + ((hash << 5) - hash);
+  }
+
+  const palette = ["#4F46E5", "#22C55E", "#F59E0B", "#EF4444", "#0F172A", "#8B5CF6"];
+  const safeIndex = Math.abs(hash) % palette.length;
+  return palette[safeIndex];
+}
+
+function loadStoredUsers(): UserAccount[] {
+  if (typeof window === "undefined") {
+    return [];
+  }
+
+  try {
+    const raw = window.localStorage.getItem(AUTH_USERS_KEY);
+    if (!raw) {
+      return [];
+    }
+
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+function loadCurrentUser(): UserAccount | null {
+  if (typeof window === "undefined") {
+    return null;
+  }
+
+  try {
+    const raw = window.localStorage.getItem(AUTH_CURRENT_USER_KEY) ?? window.sessionStorage.getItem(AUTH_CURRENT_USER_KEY);
+    if (!raw) {
+      return null;
+    }
+
+    const parsed = JSON.parse(raw);
+    return typeof parsed?.email === "string" && typeof parsed?.name === "string" ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function persistCurrentUser(user: UserAccount | null, remember: boolean) {
+  if (typeof window === "undefined") {
+    return;
+  }
+
+  if (!user) {
+    window.localStorage.removeItem(AUTH_CURRENT_USER_KEY);
+    window.sessionStorage.removeItem(AUTH_CURRENT_USER_KEY);
+    return;
+  }
+
+  const payload = JSON.stringify(user);
+  if (remember) {
+    window.localStorage.setItem(AUTH_CURRENT_USER_KEY, payload);
+    window.sessionStorage.removeItem(AUTH_CURRENT_USER_KEY);
+    return;
+  }
+
+  window.sessionStorage.setItem(AUTH_CURRENT_USER_KEY, payload);
+  window.localStorage.removeItem(AUTH_CURRENT_USER_KEY);
+}
+
+function scopeTasksForUser(tasks: Task[], user: UserAccount | null) {
+  if (!user) {
+    return [];
+  }
+
+  const userName = user.name.trim();
+  return tasks.filter(task => task.assignee === userName || task.shared.includes(userName));
+}
+
+function scopeNotificationsForUser(notifications: Notification[], user: UserAccount | null) {
+  if (!user) {
+    return [];
+  }
+
+  const name = user.name.toLowerCase();
+  const email = user.email.toLowerCase();
+  return notifications.filter(notification => {
+    const message = notification.message.toLowerCase();
+    return notification.actor === user.name || notification.actor === user.email || message.includes(name) || message.includes(email);
+  });
+}
 
 const ACTIVITY: ActivityItem[] = [
   { id: "A-001", actor: "Sarah Chen", actorColor: "#4F46E5", action: "updated the status to In Progress", time: "Today, 10:23 AM" },
@@ -423,8 +503,8 @@ const NAV_ITEMS = [
   { id: "settings" as Page, label: "Settings", icon: <Settings size={18} /> },
 ];
 
-function Sidebar({ current, navigate, collapsed, setCollapsed }: {
-  current: Page; navigate: (p: Page) => void; collapsed: boolean; setCollapsed: (v: boolean) => void;
+function Sidebar({ current, navigate, collapsed, setCollapsed, currentUser }: {
+  current: Page; navigate: (p: Page) => void; collapsed: boolean; setCollapsed: (v: boolean) => void; currentUser: UserAccount | null;
 }) {
   return (
     <aside className={cx(
@@ -479,11 +559,11 @@ function Sidebar({ current, navigate, collapsed, setCollapsed }: {
 
       <div className={cx("p-3 border-t border-sidebar-border", collapsed ? "flex justify-center" : "")}>
         <div className={cx("flex items-center gap-3 p-2 rounded-xl hover:bg-muted cursor-pointer transition-colors", collapsed ? "" : "")}>
-          <Avatar name="Alex Morgan" color="#4F46E5" size="sm" />
+          <Avatar name={currentUser?.name ?? "User"} color={currentUser?.color ?? "#4F46E5"} size="sm" />
           {!collapsed && (
             <div className="flex-1 min-w-0">
-              <p className="text-sm font-medium text-foreground truncate">Alex Morgan</p>
-              <p className="text-xs text-muted-foreground truncate">alex@taskflow.io</p>
+              <p className="text-sm font-medium text-foreground truncate">{currentUser?.name ?? "User"}</p>
+              <p className="text-xs text-muted-foreground truncate">{currentUser?.email ?? "Sign in to view profile"}</p>
             </div>
           )}
           {!collapsed && <ChevronDown size={14} className="text-muted-foreground shrink-0" />}
@@ -495,9 +575,9 @@ function Sidebar({ current, navigate, collapsed, setCollapsed }: {
 
 // ─── Header ───────────────────────────────────────────────────────────────────
 
-function Header({ title, notifCount, onNotifClick, onSearch, isDark, setIsDark }: {
+function Header({ title, notifCount, onNotifClick, onSearch, isDark, setIsDark, currentUser }: {
   title: string; notifCount: number; onNotifClick: () => void;
-  onSearch?: (q: string) => void; isDark: boolean; setIsDark: (v: boolean) => void;
+  onSearch?: (q: string) => void; isDark: boolean; setIsDark: (v: boolean) => void; currentUser: UserAccount | null;
 }) {
   const [q, setQ] = useState("");
   return (
@@ -523,7 +603,7 @@ function Header({ title, notifCount, onNotifClick, onSearch, isDark, setIsDark }
             <span className="absolute top-1 right-1 w-2 h-2 bg-red-500 rounded-full" />
           )}
         </button>
-        <Avatar name="Alex Morgan" color="#4F46E5" size="sm" />
+        <Avatar name={currentUser?.name ?? "User"} color={currentUser?.color ?? "#4F46E5"} size="sm" />
       </div>
     </header>
   );
@@ -531,7 +611,7 @@ function Header({ title, notifCount, onNotifClick, onSearch, isDark, setIsDark }
 
 // ─── Dashboard Page ───────────────────────────────────────────────────────────
 
-function DashboardPage({ tasks, navigate }: { tasks: Task[]; navigate: (p: Page, id?: string) => void }) {
+function DashboardPage({ tasks, navigate, currentUser }: { tasks: Task[]; navigate: (p: Page, id?: string) => void; currentUser: UserAccount | null }) {
   const done = tasks.filter(t => t.status === "done").length;
   const inProgress = tasks.filter(t => t.status === "in-progress").length;
   const review = tasks.filter(t => t.status === "review").length;
@@ -541,7 +621,7 @@ function DashboardPage({ tasks, navigate }: { tasks: Task[]; navigate: (p: Page,
     <div className="p-6 space-y-6">
       <div className="flex items-center justify-between">
         <div>
-          <h2 className="text-2xl font-bold text-foreground">Good morning, Alex 👋</h2>
+          <h2 className="text-2xl font-bold text-foreground">Good morning, {currentUser?.name.split(" ")[0] ?? "User"} 👋</h2>
           <p className="text-sm text-muted-foreground mt-0.5">You have {inProgress} tasks in progress and {review} waiting for review</p>
         </div>
         <Button variant="primary" onClick={() => navigate("tasks")} className="hidden sm:flex">
@@ -1411,22 +1491,40 @@ function SettingsPage({ isDark, setIsDark }: { isDark: boolean; setIsDark: (v: b
 // ─── App Shell ────────────────────────────────────────────────────────────────
 
 export default function App() {
-  const [page, setPage] = useState<Page>("login");
+  const [page, setPage] = useState<Page>(() => loadCurrentUser() ? "dashboard" : "login");
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
   const [isDark, setIsDark] = useState(false);
   const [collapsed, setCollapsed] = useState(false);
   const [showNotifs, setShowNotifs] = useState(false);
   const [showModal, setShowModal] = useState(false);
-  const [tasks, setTasks] = useState<Task[]>(TASKS);
-  const [notifications, setNotifications] = useState<Notification[]>(NOTIFICATIONS);
+  const [tasks, setTasks] = useState<Task[]>([]);
+  const [notifications, setNotifications] = useState<Notification[]>([]);
   const [editTask, setEditTask] = useState<Task | undefined>();
   const [apiError, setApiError] = useState<string | null>(null);
+  const [currentUser, setCurrentUser] = useState<UserAccount | null>(() => loadCurrentUser());
 
   useEffect(() => {
     document.documentElement.classList.toggle("dark", isDark);
   }, [isDark]);
 
   useEffect(() => {
+    if (!currentUser && page !== "login" && page !== "register") {
+      setPage("login");
+      return;
+    }
+
+    if (currentUser && page === "login") {
+      setPage("dashboard");
+    }
+  }, [currentUser, page]);
+
+  useEffect(() => {
+    if (!currentUser) {
+      setTasks([]);
+      setNotifications([]);
+      return;
+    }
+
     let mounted = true;
 
     const loadData = async () => {
@@ -1440,12 +1538,12 @@ export default function App() {
           return;
         }
 
-        setTasks(serverTasks);
-        setNotifications(serverNotifications);
+        setTasks(scopeTasksForUser(serverTasks, currentUser));
+        setNotifications(scopeNotificationsForUser(serverNotifications, currentUser));
         setApiError(null);
       } catch (error) {
         if (mounted) {
-          setApiError("Backend is unavailable. Showing local sample data until the API is running.");
+          setApiError("Backend is unavailable. Load the API server to fetch tasks and notifications.");
         }
       }
     };
@@ -1455,7 +1553,7 @@ export default function App() {
     return () => {
       mounted = false;
     };
-  }, []);
+  }, [currentUser]);
 
   const navigate = (p: Page, id?: string) => {
     if (id) setSelectedTaskId(id);
@@ -1466,15 +1564,31 @@ export default function App() {
   const unreadCount = notifications.filter(n => !n.read).length;
   const selectedTask = tasks.find(t => t.id === selectedTaskId) ?? tasks[0];
 
+  const handleAuthSuccess = async (user: UserAccount, remember: boolean) => {
+    setCurrentUser(user);
+    persistCurrentUser(user, remember);
+    setApiError(null);
+  };
+
   const refreshNotifications = async () => {
+    if (!currentUser) {
+      return;
+    }
+
     try {
-      setNotifications(await listNotifications());
+      const serverNotifications = await listNotifications();
+      setNotifications(scopeNotificationsForUser(serverNotifications, currentUser));
     } catch {
       // Ignore notification refresh failures and keep the current local state.
     }
   };
 
   const handleSaveTask = async (data: Partial<Task>) => {
+    if (!currentUser) {
+      setApiError("Sign in to create or edit tasks.");
+      return;
+    }
+
     try {
       setApiError(null);
 
@@ -1489,7 +1603,7 @@ export default function App() {
           tags: typeof data.tags === "string" ? data.tags.split(",").map((item) => item.trim()).filter(Boolean) : data.tags ?? editTask.tags,
         });
 
-        setTasks(ts => ts.map(task => (task.id === updatedTask.id ? updatedTask : task)));
+        setTasks(ts => scopeTasksForUser(ts.map(task => (task.id === updatedTask.id ? updatedTask : task)), currentUser));
       } else {
         const createdTask = await createTask({
           title: data.title ?? "Untitled Task",
@@ -1497,11 +1611,11 @@ export default function App() {
           status: data.status ?? "todo",
           priority: data.priority ?? "medium",
           dueDate: data.dueDate ?? "",
-          assignee: data.assignee ?? "Unassigned",
+          assignee: data.assignee ?? currentUser.name,
           tags: typeof data.tags === "string" ? data.tags.split(",").map((item) => item.trim()).filter(Boolean) : data.tags ?? [],
         });
 
-        setTasks(ts => [createdTask, ...ts]);
+        setTasks(ts => scopeTasksForUser([createdTask, ...ts], currentUser));
       }
 
       await refreshNotifications();
@@ -1539,7 +1653,7 @@ export default function App() {
 
     try {
       const updatedTask = await shareTask(selectedTask.id, userName);
-      setTasks(ts => ts.map(task => (task.id === updatedTask.id ? updatedTask : task)));
+      setTasks(ts => scopeTasksForUser(ts.map(task => (task.id === updatedTask.id ? updatedTask : task)), currentUser));
       await refreshNotifications();
       setApiError(null);
     } catch (error) {
@@ -1560,13 +1674,13 @@ export default function App() {
 
   if (isAuthPage) {
     return page === "login"
-      ? <LoginPage navigate={navigate} />
-      : <RegisterPage navigate={navigate} />;
+      ? <LoginPage navigate={navigate} onLogin={handleAuthSuccess} />
+      : <RegisterPage navigate={navigate} onRegister={handleAuthSuccess} />;
   }
 
   return (
     <div className="flex h-screen bg-background overflow-hidden" style={{ fontFamily: "var(--font-sans)" }}>
-      <Sidebar current={page} navigate={navigate} collapsed={collapsed} setCollapsed={setCollapsed} />
+      <Sidebar current={page} navigate={navigate} collapsed={collapsed} setCollapsed={setCollapsed} currentUser={currentUser} />
 
       <div className="flex-1 flex flex-col min-w-0">
         <Header
@@ -1576,6 +1690,7 @@ export default function App() {
           onSearch={page === "tasks" ? () => {} : undefined}
           isDark={isDark}
           setIsDark={setIsDark}
+          currentUser={currentUser}
         />
 
         {apiError && (
