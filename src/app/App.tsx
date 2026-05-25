@@ -1253,17 +1253,77 @@ function TaskModal({ onClose, onSave, editTask, currentUser }: {
 
 // ─── Task Detail Page ─────────────────────────────────────────────────────────
 
-function TaskDetailPage({ task, navigate, onEdit, onDelete, onShare }: {
+function getTaskCollaborators(task: Task, currentUser: UserAccount | null) {
+  const collaborators = new Set<string>();
+
+  if (task.assignee) {
+    collaborators.add(task.assignee);
+  }
+
+  if (currentUser?.name) {
+    collaborators.add(currentUser.name);
+  }
+
+  task.shared.forEach(name => collaborators.add(name));
+
+  return Array.from(collaborators);
+}
+
+function getTaskActivity(task: Task, currentUser: UserAccount | null) {
+  const actor = currentUser?.name ?? task.assignee;
+  const actorColor = currentUser?.color ?? task.assigneeColor;
+
+  const items = [
+    {
+      id: "created",
+      actor: task.assignee,
+      actorColor: task.assigneeColor,
+      action: "created this task",
+      time: task.createdAt,
+      detail: `Priority: ${task.priority}. Status: ${task.status}.`,
+    },
+    {
+      id: "status",
+      actor,
+      actorColor,
+      action: `marked the task as ${task.status.replace("-", " ")}`,
+      time: task.createdAt,
+    },
+  ];
+
+  if (task.shared.length > 0) {
+    items.push({
+      id: "shared",
+      actor,
+      actorColor,
+      action: `shared this task with ${task.shared.join(", ")}`,
+      time: task.createdAt,
+    });
+  }
+
+  return items;
+}
+
+function TaskDetailPage({ task, navigate, onEdit, onDelete, onShare, currentUser }: {
   task: Task;
   navigate: (p: Page) => void;
   onEdit: () => void;
   onDelete: () => void;
   onShare: (userName: string) => Promise<void>;
+  currentUser: UserAccount | null;
 }) {
   const [showShare, setShowShare] = useState(false);
   const [comment, setComment] = useState("");
   const [shareValue, setShareValue] = useState("");
   const [isSharing, setIsSharing] = useState(false);
+  const [copied, setCopied] = useState(false);
+
+  const collaborators = getTaskCollaborators(task, currentUser);
+  const activity = getTaskActivity(task, currentUser);
+  const attachmentItems = Array.from({ length: Math.max(task.attachments, 0) }, (_, index) => ({
+    name: `Attachment ${index + 1}`,
+    size: `${(1 + index * 0.4).toFixed(1)} MB`,
+  }));
 
   const handleShare = async () => {
     if (!shareValue.trim()) {
@@ -1277,6 +1337,18 @@ function TaskDetailPage({ task, navigate, onEdit, onDelete, onShare }: {
       setShowShare(false);
     } finally {
       setIsSharing(false);
+    }
+  };
+
+  const handleCopyLink = async () => {
+    const link = `https://taskflow.io/t/${task.id}`;
+
+    try {
+      await navigator.clipboard.writeText(link);
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1800);
+    } catch {
+      setCopied(false);
     }
   };
 
@@ -1329,9 +1401,9 @@ function TaskDetailPage({ task, navigate, onEdit, onDelete, onShare }: {
                 <Button variant="primary" size="sm" disabled={isSharing} onClick={handleShare}>{isSharing ? "Sharing…" : "Invite"}</Button>
               </div>
               <div className="flex flex-col gap-2">
-                {["Alex Morgan", ...task.shared].map((name, i) => (
+                {collaborators.map((name, i) => (
                   <div key={name} className="flex items-center gap-3">
-                    <Avatar name={name} color={["#4F46E5", "#22C55E", "#F59E0B"][i % 3]} size="sm" />
+                    <Avatar name={name} color={[task.assigneeColor, "#22C55E", "#F59E0B"][i % 3]} size="sm" />
                     <span className="flex-1 text-sm text-foreground">{name}</span>
                     <span className="text-xs text-muted-foreground">{i === 0 ? "Owner" : "Editor"}</span>
                   </div>
@@ -1339,7 +1411,9 @@ function TaskDetailPage({ task, navigate, onEdit, onDelete, onShare }: {
               </div>
               <div className="mt-4 pt-4 border-t border-border flex items-center gap-2">
                 <input readOnly value={`https://taskflow.io/t/${task.id}`} className="flex-1 bg-muted text-muted-foreground text-sm rounded-lg px-3 py-1.5 font-mono" />
-                <Button variant="outline" size="sm"><Copy size={12} /> Copy link</Button>
+                <Button variant="outline" size="sm" onClick={handleCopyLink}>
+                  <Copy size={12} /> {copied ? "Copied" : "Copy link"}
+                </Button>
               </div>
             </Card>
           )}
@@ -1350,12 +1424,12 @@ function TaskDetailPage({ task, navigate, onEdit, onDelete, onShare }: {
             </h3>
             {task.attachments > 0 ? (
               <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
-                {Array.from({ length: task.attachments }).map((_, i) => (
-                  <div key={i} className="flex items-center gap-2 p-3 bg-muted rounded-xl hover:bg-accent transition-colors cursor-pointer group">
+                {attachmentItems.map((item, i) => (
+                  <div key={item.name} className="flex items-center gap-2 p-3 bg-muted rounded-xl hover:bg-accent transition-colors cursor-pointer group">
                     <FileText size={16} className="text-primary shrink-0" />
                     <div className="min-w-0">
-                      <p className="text-xs font-medium text-foreground truncate">{["wireframe-v2.fig", "user-flow.pdf", "spec-doc.pdf", "mockup.png", "research.pdf", "notes.txt"][i]}</p>
-                      <p className="text-xs text-muted-foreground">{["2.4 MB", "1.1 MB", "890 KB", "3.2 MB", "1.8 MB", "24 KB"][i]}</p>
+                      <p className="text-xs font-medium text-foreground truncate">{item.name}</p>
+                      <p className="text-xs text-muted-foreground">{item.size}</p>
                     </div>
                     <ExternalLink size={12} className="text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity ml-auto shrink-0" />
                   </div>
@@ -1371,15 +1445,15 @@ function TaskDetailPage({ task, navigate, onEdit, onDelete, onShare }: {
               <Activity size={16} className="text-muted-foreground" /> Activity Timeline
             </h3>
             <div className="flex flex-col gap-0">
-              {ACTIVITY.map((item, idx) => (
+              {activity.map((item, idx) => (
                 <div key={item.id} className="flex gap-3 relative">
-                  {idx < ACTIVITY.length - 1 && (
+                  {idx < activity.length - 1 && (
                     <div className="absolute left-4 top-8 w-px bg-border h-full" />
                   )}
-                  <Avatar name={item.actor} color={item.actorColor} size="sm" />
+                  <Avatar name={item.actor ?? task.assignee} color={item.actorColor} size="sm" />
                   <div className="flex-1 pb-5">
                     <p className="text-sm text-foreground">
-                      <span className="font-medium">{item.actor}</span>{" "}
+                      <span className="font-medium">{item.actor ?? task.assignee}</span>{" "}
                       <span className="text-muted-foreground">{item.action}</span>
                     </p>
                     {item.detail && (
@@ -1396,7 +1470,7 @@ function TaskDetailPage({ task, navigate, onEdit, onDelete, onShare }: {
             </div>
 
             <div className="flex gap-3 mt-2 pt-4 border-t border-border">
-              <Avatar name="Alex Morgan" color="#4F46E5" size="sm" />
+              <Avatar name={currentUser?.name ?? task.assignee} color={currentUser?.color ?? task.assigneeColor} size="sm" />
               <div className="flex-1 flex gap-2">
                 <input value={comment} onChange={e => setComment(e.target.value)} placeholder="Add a comment…"
                   className="flex-1 bg-input-background border border-border rounded-xl px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring/40" />
@@ -1430,9 +1504,9 @@ function TaskDetailPage({ task, navigate, onEdit, onDelete, onShare }: {
               <Users size={14} className="text-muted-foreground" /> Collaborators
             </h3>
             <div className="flex flex-col gap-3">
-              {["Alex Morgan", ...task.shared].map((name, i) => (
+              {collaborators.map((name, i) => (
                 <div key={name} className="flex items-center gap-2">
-                  <Avatar name={name} color={["#4F46E5", "#22C55E", "#F59E0B"][i % 3]} size="sm" />
+                  <Avatar name={name} color={[task.assigneeColor, "#22C55E", "#F59E0B"][i % 3]} size="sm" />
                   <div className="flex-1 min-w-0">
                     <p className="text-sm font-medium text-foreground truncate">{name}</p>
                   </div>
@@ -1443,8 +1517,8 @@ function TaskDetailPage({ task, navigate, onEdit, onDelete, onShare }: {
           </Card>
 
           <div className="flex flex-col gap-2">
-            <Button variant="outline" className="w-full justify-center"><Link size={14} /> Copy link</Button>
-            <Button variant="danger" className="w-full justify-center"><Trash2 size={14} /> Delete task</Button>
+            <Button variant="outline" className="w-full justify-center" onClick={handleCopyLink}><Link size={14} /> {copied ? "Link copied" : "Copy link"}</Button>
+            <Button variant="danger" className="w-full justify-center" onClick={onDelete}><Trash2 size={14} /> Delete task</Button>
           </div>
         </div>
       </div>
@@ -2029,6 +2103,7 @@ export default function App() {
               onEdit={() => { setEditTask(selectedTask); setShowModal(true); }}
               onDelete={handleDeleteTask}
               onShare={handleShareTask}
+              currentUser={currentUser}
             />
           )}
           {page === "analytics" && <AnalyticsPage tasks={tasks} />}
